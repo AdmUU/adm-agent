@@ -1,0 +1,255 @@
+name: Build + Release + Sync
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths-ignore:
+      - "README.md"
+      - "LICENSE"
+      - ".goreleaser.yml"
+      - ".github/workflows/build.yml"
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.22.4'
+  GITEE_OWNER: ${{ vars.GITEE_OWNER }}
+  GITEE_REPO: ${{ vars.GITEE_REPO }}
+  UPLOAD_RELEASE: ${{ vars.UPLOAD_RELEASE }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests
+        run: go test -v ./...
+
+  build-and-release:
+    name: Build and Release
+    needs: test
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Create Certificates
+        run: |
+          echo "${{ secrets.SHARE_CERT_PEM }}" > build/certs/client.pem
+          echo "${{ secrets.SHARE_CERT_KEY }}" > build/certs/client.key
+          chmod 600 build/certs/client.key
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: v2
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHARE_KEY: ${{ secrets.SHARE_KEY }}
+          SHARE_SECRET: ${{ secrets.SHARE_SECRET }}
+          RELEASE_URL: ${{ vars.RELEASE_URL }}
+          SHARE_URL: ${{ vars.SHARE_URL }}
+          Environment: ${{ vars.Environment }}
+          GOVERSION: ${{ env.GO_VERSION }}
+
+      - name: Download Release Assets
+        if: env.GITEE_REPO != ''
+        run: |
+            mkdir -p release_assets
+            tag_name=${GITHUB_REF#refs/tags/}
+            echo "Downloading assets for tag: $tag_name"
+            
+            # Get the release data
+            echo "Fetching release data..."
+            release_data=$(curl -sL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag_name")
+            
+            # Check if release exists
+            if [ -z "$release_data" ] || echo "$release_data" | jq -e 'has("message")' > /dev/null; then
+              echo "Error: Failed to fetch release data"
+              echo "API Response:"
+              echo "$release_data"
+              exit 1
+            fi
+            
+            # Process each asset
+            echo "$release_data" | jq -r '.assets[] | "\(.name)|\(.id)"' | while IFS='|' read -r name id; do
+              if [ -n "$id" ]; then
+                echo "Downloading $name (ID: $id)..."
+                
+                # Download using assets API
+                if curl -L \
+                  -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/octet-stream" \
+                  -o "release_assets/$name" \
+                  "https://api.github.com/repos/${{ github.repository }}/releases/assets/$id"; then
+                  
+                  echo "Successfully downloaded $name"
+                  echo "File size: $(wc -c < "release_assets/$name") bytes"
+                else
+                  echo "Failed to download $name"
+                  exit 1
+                fi
+              fi
+            done
+            
+            # List downloaded files
+            echo "Downloaded files:"
+            ls -lh release_assets/
+            
+            echo "TAG_NAME=$tag_name" >> $GITHUB_ENV
+            echo "RELEASE_SERVER_PATH='${{ secrets.RELEASE_SERVER_PATH }}'" >> $GITHUB_ENV
+     
+      - name: Delete Gitee Releases
+        if: env.GITEE_REPO != ''
+        run: |
+          releases=$(curl -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+            "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases")
+            
+          IS_PRERELEASE=$(echo "${{ env.TAG_NAME }}" | grep -q "-" && echo "true" || echo "false")  
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            # If it's a prerelease, only delete prerelease versions
+            echo "$releases" | jq -r '.[] | select(.prerelease == true) | .id' | while read -r release_id; do
+              if [ ! -z "$release_id" ]; then
+                echo "Deleting Gitee prerelease ID: $release_id"
+                curl -X DELETE \
+                  -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+                  "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/$release_id"
+                sleep 1
+              fi
+            done
+            # echo "UPLOAD_RELEASE='false'" >> $GITHUB_ENV
+            echo "RELEASE_SERVER_PATH='${{ secrets.PRE_RELEASE_SERVER_PATH }}'" >> $GITHUB_ENV
+          else
+            # If it's a stable release, delete all prerelease versions
+            echo "$releases" | jq -r '.[] | select(.prerelease == false) | .id' | while read -r release_id; do
+              if [ ! -z "$release_id" ]; then
+                echo "Deleting Gitee release ID: $release_id"
+                curl -X DELETE \
+                  -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+                  "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/$release_id"
+                sleep 1
+              fi
+            done
+          fi
+          
+      - name: Create Gitee Release
+        if: env.GITEE_REPO != ''
+        run: |
+          # Get current commit SHA
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "Current commit SHA: $COMMIT_SHA"
+          
+          # Get release notes from GitHub
+          release_body=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
+            jq -r '.body')
+          
+          if [ -z "$release_body" ]; then
+            echo "No release notes found for the latest GitHub release."
+            echo "Using commit message as release notes."
+            release_body=$(git log -1 --pretty=%B)
+          fi
+          
+          IS_PRERELEASE=$(echo "${{ env.TAG_NAME }}" | grep -q "-" && echo "true" || echo "false")
+          
+          # Create JSON payload
+          json_payload=$(jq -n \
+            --arg tag "${{ env.TAG_NAME }}" \
+            --arg name "Release ${{ env.TAG_NAME }}" \
+            --arg body "$release_body" \
+            --arg commit "main" \
+            --arg prerelease "$IS_PRERELEASE" \
+            '{
+              tag_name: $tag,
+              name: $name,
+              body: $body,
+              target_commitish: $commit,
+              prerelease: ($prerelease | test("true"))
+            }')
+          
+          echo "Request payload:"
+          echo "$json_payload" | jq '.'
+          
+          # Create release and save response
+          response=$(curl -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+            "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases" \
+            -d "$json_payload")
+          
+          # echo "Gitee API Response:"
+          # echo "$response" | jq '.'
+          
+          if [ "$(echo "$response" | jq -r '.id')" = "null" ] || [ "$(echo "$response" | jq -r '.id')" = "" ]; then
+            echo "Error creating Gitee release. API response:"
+            echo "$response" | jq '.'
+            exit 1
+          fi
+          
+          release_id=$(echo "$response" | jq -r '.id')
+          echo "Successfully created Gitee release with ID: $release_id"
+          echo "GITEE_RELEASE_ID=$release_id" >> $GITHUB_ENV
+  
+      - name: Upload to Gitee Release
+        if: env.GITEE_RELEASE_ID != ''
+        run: |
+          for file in release_assets/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading $file to Gitee..."
+              response=$(curl -X POST \
+                -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+                -F "file=@$file" \
+                "https://gitee.com/api/v5/repos/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/${{ env.GITEE_RELEASE_ID }}/attach_files")
+              
+              # echo "Upload response for $file:"
+              # echo "$response" | jq '.'
+              
+              if [ "$(echo "$response" | jq -r '.id')" = "null" ] || [ "$(echo "$response" | jq -r '.id')" = "" ]; then
+                echo "Error uploading file $file to Gitee release"
+                exit 1
+              fi
+              
+              sleep 1
+            fi
+          done
+      - name: Install SSH Key
+        if: env.UPLOAD_RELEASE == 'true'
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.RELEASE_SERVER_PRIVATE_KEY }}
+          known_hosts: unnecessary      
+      - name: Upload to Update Server
+        if: env.UPLOAD_RELEASE == 'true'
+        run: |
+          ssh-keyscan -p ${{ secrets.RELEASE_SERVER_PORT }} -H ${{ secrets.RELEASE_SERVER_HOST }} >> ~/.ssh/known_hosts 
+          scp -r -P ${{ secrets.RELEASE_SERVER_PORT }} dist/*.{tar.gz,txt,json} ${{ secrets.RELEASE_SERVER_USER }}@${{ secrets.RELEASE_SERVER_HOST }}:${{ env.RELEASE_SERVER_PATH }}
+      - name: Cleanup
+        if: always()
+        run: rm -rf release_assets

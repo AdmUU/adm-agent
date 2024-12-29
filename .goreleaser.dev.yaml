@@ -1,0 +1,56 @@
+version: 2
+
+project_name: adm-agent
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dev
+    env:
+      - CGO_ENABLED=0
+      - GOVERSION={{ if index .Env "GOVERSION"  }}{{ .Env.GOVERSION }}{{ end }}
+      - SHARE_URL={{ if index .Env "SHARE_URL"  }}{{ .Env.SHARE_URL }}{{ end }}
+      - SHARE_KEY={{ if index .Env "SHARE_KEY"  }}{{ .Env.SHARE_KEY }}{{ end }}
+      - SHARE_SECRET={{ if index .Env "SHARE_SECRET"  }}{{ .Env.SHARE_SECRET }}{{ end }}
+      - RELEASE_URL={{ if index .Env "RELEASE_URL"  }}{{ .Env.RELEASE_URL }}{{ end }}
+      - Environment={{ if index .Env "Environment"  }}{{ .Env.Environment }}{{ end }}
+    ldflags:
+      - -s -w
+      - -X github.com/admuu/adm-agent/cmd.version={{.Version}}
+      - -X github.com/admuu/adm-agent/cmd.gitCommit={{.ShortCommit}}
+      - -X github.com/admuu/adm-agent/cmd.buildTime={{.Date}}
+      - -X github.com/admuu/adm-agent/cmd.goVersion={{.Env.GOVERSION}}
+      - -X github.com/admuu/adm-agent/cmd.platform={{.Os}}/{{.Arch}}{{with .Arm}}v{{.}}{{end}}{{with .Mips}}_{{.}}{{end}}
+      - -X github.com/admuu/adm-agent/internal/processor.ShareUrl={{.Env.SHARE_URL}}
+      - -X github.com/admuu/adm-agent/internal/processor.ShareKey={{.Env.SHARE_KEY}}
+      - -X github.com/admuu/adm-agent/internal/processor.ShareSecret={{.Env.SHARE_SECRET}}
+      - -X github.com/admuu/adm-agent/internal/config.Environment={{.Env.Environment}}
+      - -X github.com/admuu/adm-agent/pkg/utils.ReleaseUrl={{.Env.RELEASE_URL}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - "386"
+
+archives:
+  - format: binary
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- .Arch }}
+      {{- with .Arm }}v{{ . }}{{ end }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
