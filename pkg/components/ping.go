@@ -18,7 +18,7 @@ func IcmpPing(ip string, count int) (float32, error) {
 	}
 	pinger.SetPrivileged(true)
 	pinger.Count = count
-	pinger.Timeout = time.Second * 1
+	pinger.Timeout = 800*time.Millisecond
 	err = pinger.Run()
 	if err != nil {
 		return 0, err
@@ -36,7 +36,7 @@ func TcpPing(data map[string]interface{}) (float32, error) {
 	ip := data["ip"].(string)
 	port := data["port"].(string)
 	startTime := time.Now()
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, port), 1*time.Second)
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, port), 800*time.Millisecond)
 	if err != nil {
 		return 0, err
 	}

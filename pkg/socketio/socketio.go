@@ -4,7 +4,6 @@ Copyright © 2024 Admin.IM <dev@admin.im>
 package socketio
 
 import (
-	"crypto/tls"
 	"fmt"
 	"net/http/cookiejar"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 	"github.com/admuu/adm-agent/build/certs"
 	"github.com/admuu/adm-agent/internal/config"
 	"github.com/admuu/adm-agent/pkg/adm"
+	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
 	"github.com/gorilla/websocket"
 )
@@ -57,7 +57,7 @@ func (s *SocketIO) Run() error {
 			return fmt.Errorf("Connect to socket server %v blocked", host)
 		default:
 			if r := s.Connect(scheme, host); r != nil {
-				log.WithError(r).Error("Run SocketIO error.")
+				log.Errorf("Run SocketIO error: %v", r)
 				continue
 			}
 		}
@@ -73,16 +73,16 @@ func (s *SocketIO) Connect(scheme string, host string) error {
 		}
 	}()
 	s.delay()
-	
-	var clientCert utils.Certificate
+
+	var clientCert *network.Certificate
 	if s.ConfigData.ShareEnable == "yes" {
-        clientCert = utils.Certificate{
+        clientCert = &network.Certificate{
             CertPem: certs.GetCertPem(),
             CertKey: certs.GetCertKey(),
         }
     }
-	
-	tokenInfo, rcode, r  := adm.AgentTokenRequest(s.ApiUrl, s.ApiAuthCode, clientCert)
+
+	tokenInfo, rcode, r  := adm.AgentTokenRequest(s.ApiUrl, s.ApiAuthCode, s.ConfigData.ApiSecret, clientCert)
 	if r != nil {
 		if (rcode == 20015) {
 			log.Warn("This node is blocked by the server.")
@@ -90,25 +90,19 @@ func (s *SocketIO) Connect(scheme string, host string) error {
 		}
 		return fmt.Errorf("GetToken failed: %v", r)
 	}
-	
+	var reqSign string
+	urlPath := "/socket.io/"
+	if clientCert != nil {
+		reqSign = "&reqsign=" + adm.GenerateReqSign(urlPath, s.ConfigData.ApiSecret)
+	}
 	s.token = tokenInfo.Token
-	u := url.URL{Scheme: scheme, Host: host, Path: "/socket.io/", RawQuery: "token=" + s.token + "&auth_code=" + s.ApiAuthCode}
-	dialer := websocket.Dialer{
-		Jar: tokenInfo.Jar,
-	}
-	
-	if len(clientCert.CertPem) > 0 && len(clientCert.CertKey) > 0 {
-		cert, err := tls.X509KeyPair(clientCert.CertPem, clientCert.CertKey)
-		if err != nil {
-			log.Fatalf("Error loading certificate and key: %v", err)
-		}
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		}
-		dialer.TLSClientConfig = tlsConfig
-	}
-	
-	s.conn, _, r = dialer.Dial(u.String(), nil)
+	rq := fmt.Sprintf("token=%s&auth_code=%s%s",
+	s.token,
+	s.ApiAuthCode,
+	reqSign)
+	u := url.URL{Scheme: scheme, Host: host, Path: urlPath, RawQuery: rq}
+	ws := network.Websocket{Url: u.String(), Jar: tokenInfo.Jar, Certificate: clientCert}
+	s.conn, _, r = ws.Dial()
 	if r != nil {
 		return fmt.Errorf("Connect to socket server %v failed: %v", host, r)
 	}
@@ -134,12 +128,12 @@ func (s *SocketIO) Connect(scheme string, host string) error {
 	for {
 		_, msg, r := s.conn.ReadMessage()
 		if r != nil {
-			log.WithError(r).Error("Read message error")
+			log.Errorf("Read message error: %v", r)
 			break
 		}
 		packet, r := s.parseSocketMessage(msg)
 		if r != nil {
-			log.WithError(r).Debug("Failed to parse message")
+			log.Debugf("Failed to parse message: %v", r)
 			continue
 		}
 		if packet.Data == nil {
@@ -158,11 +152,11 @@ func (s *SocketIO) Connect(scheme string, host string) error {
 			}()
 			r := s.handleEvent(packet.Event, packet.Data)
 			if r != nil {
-				log.WithError(r).Warn("handleEvent failed")
+				log.Warnf("handleEvent failed: %v", r)
 			}
 		}()
 		if (err != nil) {
-			log.WithError(err).Warn("Failed to handle event")
+			log.Warnf("Failed to handle event: %v", err)
 		}
     }
 	return err

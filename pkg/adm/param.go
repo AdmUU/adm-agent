@@ -5,19 +5,37 @@ package adm
 
 import (
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/admuu/adm-agent/internal/config"
+	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
 	"github.com/spf13/viper"
 )
+
+
+func generateRandomString(length int) string {
+    const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+    b := make([]byte, length)
+    max := byte(len(charset))
+    for i := range b {
+        randomBytes := make([]byte, 1)
+        if _, err := rand.Read(randomBytes); err != nil {
+            panic(err)
+        }
+        b[i] = charset[randomBytes[0]%max]
+    }
+    return string(b)
+}
 
 func makeRegistParam(key string, secret string, config config.Data) (string, string, error)  {
 	fingerprint := utils.GenerateFingerprint()
@@ -42,12 +60,12 @@ func makeRegistParam(key string, secret string, config config.Data) (string, str
         params["sponsor_id"] = config.ShareSponsorID
     }
 
-    ipv4, err := utils.GetIP("ipv4")
+    ipv4, err := network.GetIP("ipv4")
     if ipv4 != nil && err == nil {
         params["ipv4"] = ipv4.(string)
     }
 
-    ipv6, err := utils.GetIP("ipv6")
+    ipv6, err := network.GetIP("ipv6")
     if ipv6 != nil && err == nil {
         params["ipv6"] = ipv6.(string)
     }
@@ -83,4 +101,15 @@ func makeRegistParam(key string, secret string, config config.Data) (string, str
     hmacSha256.Write([]byte(message))
     signature := hex.EncodeToString(hmacSha256.Sum(nil))
     return postBody, signature, nil
+}
+
+func GenerateReqSign(path string, secret string) string {
+    timestamp := time.Now().Unix()
+    randomStr := generateRandomString(16)
+    signStr := fmt.Sprintf("%s@%d@%s@%s", path, timestamp, randomStr, secret)
+
+    hasher := md5.New()
+    hasher.Write([]byte(signStr))
+    hash := hex.EncodeToString(hasher.Sum(nil))
+    return fmt.Sprintf("%d-%s-%s", timestamp, randomStr, hash)
 }

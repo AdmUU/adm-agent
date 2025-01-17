@@ -30,7 +30,7 @@ func (s *SocketIO) websocketWriter() {
     for message := range s.messageChan {
 		err := s.conn.WriteMessage(message.messageType, message.data)
         if err != nil {
-			log.WithError(err).Error("Error writing message")
+			log.Errorf("Error writing message: %v", err)
 			s.conn.Close()
             break
         }

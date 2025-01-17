@@ -9,6 +9,7 @@ import (
 )
 
 var logger = logrus.New()
+var log = GetLogger()
 
 func init() {
 	logger.SetLevel(logrus.InfoLevel)

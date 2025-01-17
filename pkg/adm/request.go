@@ -6,16 +6,27 @@ package adm
 import (
 	"fmt"
 
+	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
 )
 
 var log = utils.GetLogger()
 
-func registRequest(apiUrl string, requestData string, signature string, clientCert utils.Certificate) (*NodeInfo, error)  {
+func registRequest(apiUrl string, requestData string, signature string, secret string, clientCert *network.Certificate) (*NodeInfo, error)  {
     var nodeInfo NodeInfo
+    var reqSign string
+    urlPath := "/api/adm/v1/registNode"
+    if clientCert != nil {
+        reqSign = "&reqsign=" + GenerateReqSign(urlPath, secret)
+    }
+
     log.Debug("Register a node on ", apiUrl)
-    url := apiUrl+"/api/adm/v1/registNode?signature=" + signature
-    http := utils.Http{Url: url, Method: "POST", Data: requestData, Certificate: clientCert}
+    url := fmt.Sprintf("%s%s?signature=%s%s",
+        apiUrl,
+        urlPath,
+        signature,
+        reqSign)
+    http := network.Http{Url: url, Method: "POST", Data: requestData, Certificate: clientCert}
     response, err := http.ApiRequest()
     if err != nil {
         return nil,err
@@ -36,10 +47,19 @@ func registRequest(apiUrl string, requestData string, signature string, clientCe
     return &nodeInfo,nil
 }
 
-func AgentTokenRequest(apiUrl string, authCode string, clientCert utils.Certificate) (*TokenInfo, int, error)  {
+func AgentTokenRequest(apiUrl string, authCode string, secret string, clientCert *network.Certificate) (*TokenInfo, int, error)  {
     var tokenInfo TokenInfo
-    url := apiUrl+"/api/adm/v1/requestAgentToken?auth_code=" + authCode
-    http := utils.Http{Url: url, Method: "POST", Certificate: clientCert}
+    var reqSign string
+    urlPath := "/api/adm/v1/requestAgentToken"
+    if clientCert != nil {
+        reqSign = GenerateReqSign(urlPath, secret)
+    }
+    url := fmt.Sprintf("%s%s?auth_code=%s&reqsign=%s",
+        apiUrl,
+        urlPath,
+        authCode,
+        reqSign)
+    http := network.Http{Url: url, Method: "POST", Certificate: clientCert}
     response, err := http.ApiRequest()
     if err != nil {
         return nil, response.Code, err

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 
@@ -25,11 +26,23 @@ var (
     ReleaseUrl string
 )
 
+func (u *Update) preRun() {
+	if (viper.GetString("app.env") != "dev") {
+		return
+	}
+    if envReleaseUrl := os.Getenv("ADM_RELEASE_URL"); envReleaseUrl != "" {
+        ReleaseUrl = envReleaseUrl
+    }
+}
+
 func (u *Update) CheckUpdate() error {
 	var source selfupdate.Source
 	var err error
 	var found bool
+	var header http.Header
 	u.need = false
+
+	u.preRun()
 
 	if (u.UpdateProvider == "") {
 		u.UpdateProvider = "http"
@@ -40,8 +53,11 @@ func (u *Update) CheckUpdate() error {
 		if ReleaseUrl == "" {
 			return errors.New("ReleaseUrl is empty")
 		}
+		header = make(http.Header)
+		header.Set("User-Agent", "Adm-agent/" + viper.GetString("version"))
 		source, err = selfupdate.NewHttpSource(selfupdate.HttpConfig{
 			BaseURL: ReleaseUrl,
+			Headers: header,
 		})
 	default:
 		source, err = selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})

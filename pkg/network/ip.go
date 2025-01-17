@@ -1,7 +1,7 @@
 /*
 Copyright © 2024-2025 Admin.IM <dev@admin.im>
 */
-package utils
+package network
 
 import (
 	"encoding/json"
@@ -19,7 +19,8 @@ type myIP struct {
 }
 
 func FilterIP(input string, args ...string) (ip string, host string, port string, ipVersion string, err error) {
-	prefer := "ipv4"
+	//prefer := "ipv4"
+	var prefer string
 	if len(args) > 0 {
 		prefer = args[0]
 	} else if viper.IsSet("ip.prefer") && viper.GetString("ip.prefer") != "" {
@@ -57,21 +58,21 @@ func GetIP(ipVersion string) (interface{}, error)  {
     var ip string
     var respData myIP
     var ipApi string
-    var network string
+    var tcpType string
 
 	switch ipVersion {
 	case "ipv4":
 		ipApi = "ipv4"
-		network = "tcp4"
+		tcpType = "tcp4"
 	case "ipv6":
 		ipApi = "ipv6"
-		network = "tcp6"
+		tcpType = "tcp6"
 	default:
 		ipApi = "ip"
-		network = "tcp"
+		tcpType = "tcp"
 	}
     ipApiUrl := "https://" + ipApi + ".001000.best"
-    http := Http{Url: ipApiUrl, Method: "GET", Data: map[string]string{"format":"json"}, NetworkType: network, Timeout: 10}
+    http := Http{Url: ipApiUrl, Method: "GET", Data: map[string]string{"format":"json"}, NetworkType: tcpType, Timeout: 10}
     response, err := http.UrlRequest()
     if err != nil {
         return nil, err
@@ -97,11 +98,13 @@ func domainToIP(domain string, prefer string) (net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, ip := range ips {
-		if prefer == "ipv4" && net.ParseIP(ip.String()).To4() != nil {
-			return ip, nil
-		} else if prefer == "ipv6" && net.ParseIP(ip.String()).To4() == nil {
-			return ip, nil
+	if prefer != "" {
+		for _, ip := range ips {
+			if prefer == "ipv4" && net.ParseIP(ip.String()).To4() != nil {
+				return ip, nil
+			} else if prefer == "ipv6" && net.ParseIP(ip.String()).To4() == nil {
+				return ip, nil
+			}
 		}
 	}
 	return ips[0], nil

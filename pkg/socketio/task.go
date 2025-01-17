@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/admuu/adm-agent/pkg/components"
+	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
 	"github.com/gorilla/websocket"
 )
@@ -69,7 +70,7 @@ func (s *SocketIO) handleEvent(event string, msg interface{}) error {
 		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 			host = strings.Trim(host, "[]")
 		}
-		ip, host, port, ipVersion, err := utils.FilterIP(host)
+		ip, host, port, ipVersion, err := network.FilterIP(host)
 
 		if err != nil {
 			return fmt.Errorf("filterIP error: %v", err)
@@ -214,7 +215,7 @@ func (s *SocketIO) taskPing(data map[string]interface{}, taskId string) {
 				delay, err = components.TcpPing(data)
 			}
 			if err != nil {
-				log.WithError(err).Debug("ping error")
+				log.Debugf("ping error: %v", err)
 				delay = 0
 			}
 			res := map[string]interface{}{
@@ -225,7 +226,8 @@ func (s *SocketIO) taskPing(data map[string]interface{}, taskId string) {
 			s.sendMessage("agent-response", res)
 			duration := time.Since(startTime)
 			if duration < 1*time.Second {
-				time.Sleep(1 * time.Second)
+				remainingTime := 1*time.Second - duration
+				time.Sleep(remainingTime)
 			}
 		}
 	}

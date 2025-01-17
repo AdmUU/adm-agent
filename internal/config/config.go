@@ -39,23 +39,12 @@ func ReadConfig(ConfigFile string) {
 	viper.SetDefault("share.did", "")
 	viper.SetDefault("app.env", Environment)
 	viper.SetDefault("ip.prefer", "")
-	
+
     if (ConfigFile != "") {
 		viper.SetConfigFile(ConfigFile)
 		log.Info("Load config file: " + ConfigFile)
 	} else {
 		configPath := ""
-		// if (ConfigFile != "") {
-		// 	viper.SetConfigFile(ConfigFile)
-		// 	log.Debugf("Load config file: " + ConfigFile)
-		// } else {
-		// 	configPath := ""
-		// 	configPath, _ = os.Getwd()
-		// 	viper.AddConfigPath(configPath)
-		// 	viper.SetConfigName("config")
-		// 	viper.SetConfigType("yaml")
-		// 	log.Debugf("No configuration file specified, load config file in " + configPath)
-		// }
 		if Environment == "dev" {
 			configPath, _ = os.Getwd()
 			viper.AddConfigPath(configPath)
