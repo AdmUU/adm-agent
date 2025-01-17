@@ -2,14 +2,14 @@
 Copyright © 2024-2025 Admin.IM <dev@admin.im>
 */
 
-package utils
+package network
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +18,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/admuu/adm-agent/pkg/utils"
 )
 
 type Http struct {
@@ -27,7 +29,7 @@ type Http struct {
 	Timeout     time.Duration
 	Jar         *cookiejar.Jar
 	NetworkType interface{}
-	Certificate Certificate
+	Certificate *Certificate
 }
 
 type Response struct {
@@ -41,37 +43,33 @@ type Response struct {
 }
 
 type Certificate struct {
-    CertPem []byte 
-    CertKey []byte 
+    CertPem []byte
+    CertKey []byte
 }
 
-var log = GetLogger()
+var log = utils.GetLogger()
 
 func (h *Http) client() *http.Client {
 	if h.Timeout == 0 {
 		h.Timeout = 30
 	}
-
-	dialer := &net.Dialer{
-		Timeout:   h.Timeout * time.Second,
-		KeepAlive: h.Timeout * time.Second,
-	}
+	netdialer := &NetDialer{
+        Timeout:       10 * time.Second,
+        KeepAlive:    60 * time.Second,
+        fallbackDelay: 300 * time.Millisecond,
+        resolver:     net.DefaultResolver,
+    }
 
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			if h.NetworkType == nil {
-				h.NetworkType = "tcp"
-			}
-			return dialer.DialContext(ctx, h.NetworkType.(string), addr)
-		},
+		DialContext:         netdialer.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	
-	if len(h.Certificate.CertPem) > 0 && len(h.Certificate.CertKey) > 0 {
+
+	if h.Certificate != nil {
 		cert, err := tls.X509KeyPair(h.Certificate.CertPem, h.Certificate.CertKey)
 		if err != nil {
 			log.Fatalf("Error loading certificate and key: %v", err)
@@ -81,7 +79,7 @@ func (h *Http) client() *http.Client {
 		}
 		transport.TLSClientConfig = tlsConfig
 	}
-	
+
 	return &http.Client{
 		Transport: transport,
 	}
@@ -124,6 +122,9 @@ func (h *Http) do() (*http.Response, *cookiejar.Jar, error) {
 	client := h.client()
 	client.Jar = jar
 	resp, err = client.Do(req)
+	if err != nil {
+		err = errors.New(h.extractErrorMessage(err.Error()))
+	}
 	return resp, jar, err
 }
 
@@ -202,4 +203,14 @@ func (h *Http) encodeBody() (io.Reader, error) {
 		}
 		return bytes.NewReader(jsonData), nil
 	}
+}
+
+func (h *Http) extractErrorMessage(err string) string {
+    lastColonIndex := strings.LastIndex(err, ":")
+    if lastColonIndex == -1 {
+        return err
+    }
+
+    message := strings.TrimSpace(err[lastColonIndex+1:])
+    return message
 }

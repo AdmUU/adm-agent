@@ -70,12 +70,14 @@ func (ps *Processor) Process() error {
         go func() {
             defer wg.Done()
             if err := socketConnect(ps.ConfigData.ApiUrl, viper.GetString("api.authcode"), &ps.ConfigData); err != nil {
-                log.WithError(err).Error("SocketConnect failed.")
+				log.Errorf("SocketConnect failed: %v", err)
             }
         }()
 	}
 	if (ps.ShareData.ShareEnable == "yes" && ShareUrl != "") {
 		ps.ShareData.ApiUrl = ShareUrl
+		ps.ShareData.ApiKey = ShareKey
+		ps.ShareData.ApiSecret = ShareSecret
 		log.Info("Share server enable")
 
 		if (viper.GetString("share.authcode") != "") {
@@ -84,7 +86,7 @@ func (ps *Processor) Process() error {
             go func() {
                 defer wg.Done()
                 if err := socketConnect(ps.ShareData.ApiUrl, viper.GetString("share.authcode"), &ps.ShareData); err != nil {
-                    log.WithError(err).Error("SocketConnect share server failed.")
+					log.Errorf("SocketConnect share server failed: %v", err)
                 }
             }()
 		}
@@ -105,7 +107,7 @@ func (ps *Processor) Register() {
     }()
 
 	ps.preRun()
-	
+
 	if ps.ConfigData.ApiUrl != "" && ps.ConfigData.ApiKey != "" && ps.ConfigData.ApiSecret != "" {
 		if err := getAuthCode(&ps.ConfigData); err != nil {
 			log.Fatal("Get authCode failed: " + err.Error())

@@ -22,12 +22,12 @@ This is the agent of [Admin.IM](https://www.admin.im) platform. It integrates se
 #### Prerequisites
 
 - Linux systems that support systemd
-- Install as root user or with sudo privileges (only during installation)
+- Install using sudo privileges
 
 ```bash
 bash <(curl -fsSL https://get.admin.im) -a https://your_domain -k your_key -s your_secret -share yes|no
 ```
-You can get the key and secret after deploying the ADM server locally.
+You can get the key and secret after deploying the ADM server.
 
 ### Building from Source
 
@@ -46,14 +46,23 @@ go build
 ### Basic Commands
 
 ```bash
-# Start the agent
-./adm-agent
+# Start the agent with a specific config file
+./adm-agent --config /path/to/config.yaml
+
+# Register a node
+./adm-agent register  -a https://your_domain -k your_key -s your_secret
+
+# Install as a system service
+./adm-agent install
+
+# Uninstall system service
+./adm-agent uninstall
 
 # Check agent status
 ./adm-agent status
 
-# Start the agent with a specific config file
-./adm-agent --config /path/to/config.yaml
+# Stop the agent
+./adm-agent stop
 
 # Check version
 ./adm-agent --version
@@ -76,24 +85,6 @@ share:
   enable: "yes"  # or "no" to disable sharing
   authcode: "your-share-auth-code"
   did: "your-share-node-id"
-```
-
-## Service Integration
-
-ADM Agent can be installed as a system service:
-
-```bash
-# Install as a service
-sudo ./adm-agent install
-
-# Start the service
-sudo ./adm-agent start
-
-# Check service status
-sudo ./adm-agent status
-
-# Stop the service
-sudo ./adm-agent stop
 ```
 
 ## Contributing

@@ -1,7 +1,7 @@
 /*
 Copyright © 2024-2025 Admin.IM <dev@admin.im>
 */
-package utils
+package network
 
 import (
 	"encoding/json"
@@ -57,21 +57,21 @@ func GetIP(ipVersion string) (interface{}, error)  {
     var ip string
     var respData myIP
     var ipApi string
-    var network string
+    var tcpType string
 
 	switch ipVersion {
 	case "ipv4":
 		ipApi = "ipv4"
-		network = "tcp4"
+		tcpType = "tcp4"
 	case "ipv6":
 		ipApi = "ipv6"
-		network = "tcp6"
+		tcpType = "tcp6"
 	default:
 		ipApi = "ip"
-		network = "tcp"
+		tcpType = "tcp"
 	}
     ipApiUrl := "https://" + ipApi + ".001000.best"
-    http := Http{Url: ipApiUrl, Method: "GET", Data: map[string]string{"format":"json"}, NetworkType: network, Timeout: 10}
+    http := Http{Url: ipApiUrl, Method: "GET", Data: map[string]string{"format":"json"}, NetworkType: tcpType, Timeout: 10}
     response, err := http.UrlRequest()
     if err != nil {
         return nil, err
