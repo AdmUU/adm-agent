@@ -1,42 +1,57 @@
-/*
-Copyright © 2024-2025 Admin.IM <dev@admin.im>
-*/
+// Copyright 2024-2025 Admin.IM <dev@admin.im>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package socketio
 
 import (
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/admuu/adm-agent/pkg/components"
-	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
 	"github.com/gorilla/websocket"
 )
 
+// initTaskHandlers initializes task registry and registers task handlers
+func (s *SocketIO) initTaskHandlers() {
+	s.taskRegistry = components.NewTaskRegistry()
+	s.taskRegistry.RegisterHandler(&components.PingHandler{})
+	s.taskRegistry.RegisterHandler(&components.WebspeedHandler{})
+}
+
+// SendMessage sends a message with given event and data
+func (s *SocketIO) SendMessage(event string, data map[string]interface{}) error {
+	return s.sendMessage(event, data)
+}
+
+// handleEvent processes incoming socket events
 func (s *SocketIO) handleEvent(event string, msg interface{}) error {
 	var err error
+
 	switch event {
 	case "init":
 		data := msg.(map[string]interface{})
-		pInterval, err := data["pingInterval"].(float64)
-		if !err {
+		pInterval, ok := data["pingInterval"].(float64)
+		if !ok {
 			log.Error("PingInterval error")
 		} else {
 			s.keepPing(pInterval)
 		}
-		//s.keepAlive()
+
 	case "connect":
 		data := msg.(string)
 		s.dialerTimes = 0
 		log.Infof("Connection sid is %v\n", data)
+
 	case "disconnect":
 		s.conn.Close()
 		log.Warn("Handle disconnect event.")
+
 	case "disable":
 		s.conn.Close()
 		log.Warn("Handle disable event.")
+
 	case "update":
 		go func() {
 			defer func() {
@@ -48,60 +63,101 @@ func (s *SocketIO) handleEvent(event string, msg interface{}) error {
 			if r := update.DoUpdate(); r != nil {
 				log.Warnf("DoUpdate error: %v ", r)
 			}
-
 		}()
 		log.Warn("Handle update event.")
+
 	case "stop-task":
 		taskId := msg.(string)
 		if s.taskChanDone[taskId] != nil {
 			close(s.taskChanDone[taskId])
 		}
+
 	case "block":
 		log.Warn("Handle block event.")
 		close(s.ConnectChanDone)
+
 	case "err":
 		log.Warnf("Received error message: %v\n", msg.(string))
-	case "request-ping":
-		data := msg.(map[string]interface{})
-		if data["host"] == nil || data["pingtype"] == nil || data["protocol"] == nil || data["taskId"] == nil {
-			return fmt.Errorf("event data format invalid")
-		}
-		host := strings.Trim(data["host"].(string), " \n\"'")
-		if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-			host = strings.Trim(host, "[]")
-		}
-		ip, host, port, ipVersion, err := network.FilterIP(host)
 
-		if err != nil {
-			return fmt.Errorf("filterIP error: %v", err)
-		}
-		protocol := data["protocol"].(string)
-		taskId := data["taskId"].(string)
-		if protocol != "tcp" {
-			port = ""
-		}
-		res := map[string]interface{}{
-			"ip":        ip,
-			"port":      port,
-			"ipVersion": ipVersion,
-			"taskType":  "ping",
-			"taskId":    taskId,
-		}
-		s.sendMessage("agent-response", res)
-		data["ip"] = ip
-		data["host"] = host
-		data["port"] = port
-		data["ipVersion"] = ipVersion
-		log.Debug(data)
-		s.taskPing(data, taskId)
 	case "agent-response":
 		log.Debug("agent-response")
+
 	default:
-		log.Infof("Default event: [%v] %v\n", event, msg.(string))
+		if err = s.handleTaskRequest(event, msg); err != nil {
+			log.Infof("Default event: [%v] %+v\n", event, msg)
+		}
 	}
 	return err
 }
 
+// handleTaskRequest processes task request events with "request-" prefix
+func (s *SocketIO) handleTaskRequest(event string, msg interface{}) error {
+	if len(event) < 8 || event[:8] != "request-" {
+		return fmt.Errorf("not a task request event")
+	}
+
+	// Extract task type by removing "request-" prefix
+	taskType := event[8:]
+	log.Debugf("task taskType %+v", taskType)
+	handler, exists := s.taskRegistry.GetHandler(taskType)
+	if !exists {
+		return fmt.Errorf("unknown task type: %s", taskType)
+	}
+	log.Debugf("task handler %+v", handler)
+
+	data, ok := msg.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("invalid data format for task %s", taskType)
+	}
+
+	// Validate data format
+	if err := handler.ValidateData(data); err != nil {
+		return fmt.Errorf("data validation failed for task %s: %v", taskType, err)
+	}
+
+	// Preprocess data
+	processedData, response, err := handler.PreProcess(data)
+	if err != nil {
+		return fmt.Errorf("data preprocessing failed for task %s: %v", taskType, err)
+	}
+
+	// Send preprocessing response
+	s.sendMessage("agent-response", response)
+
+	// Execute task
+	taskId := data["taskId"].(string)
+	go s.executeTask(handler, processedData, taskId)
+
+	return nil
+}
+
+// executeTask executes a task with the given handler and data
+func (s *SocketIO) executeTask(handler components.TaskHandler, data map[string]interface{}, taskId string) {
+	// Create stop channel
+	s.taskChanDone[taskId] = make(chan struct{})
+
+	defer func() {
+		if s.taskChanDone[taskId] != nil {
+			select {
+			case <-s.taskChanDone[taskId]:
+			default:
+				close(s.taskChanDone[taskId])
+			}
+			delete(s.taskChanDone, taskId)
+		}
+		if r := recover(); r != nil {
+			log.Debugf("Task %s panic: %v", taskId, r)
+		}
+	}()
+
+	// Execute task
+	err := handler.Execute(data, taskId, s.taskChanDone[taskId], s)
+	if err != nil {
+		log.Debugf("Task %s execution failed: %v", taskId, err)
+	}
+}
+
+// keepPing maintains ping heartbeat at specified interval
 func (s *SocketIO) keepPing(pInterval float64) {
 	pingInterval := time.Duration(pInterval) * time.Millisecond
 	s.pingChanDone = make(chan struct{})
@@ -125,13 +181,13 @@ func (s *SocketIO) keepPing(pInterval float64) {
 					close(s.pingChanDone)
 					return
 				}
-				//s.messageChan <- WebSocketMessage{websocket.TextMessage, []byte(`2`)}
 				s.messageChan <- WebSocketMessage{websocket.TextMessage, []byte(`2/agent`)}
 			}
 		}
 	}(pingInterval)
 }
 
+// keepAlive sends periodic keep-alive messages every 10 seconds
 func (s *SocketIO) keepAlive() {
 	interval := 10 * time.Second
 	eventName := "agent-keepalive"
@@ -155,6 +211,7 @@ func (s *SocketIO) keepAlive() {
 	}(interval)
 }
 
+// delay implements exponential backoff delay for connection retries
 func (s *SocketIO) delay() {
 	var (
 		initialDelay = 2 * time.Second
@@ -174,6 +231,7 @@ func (s *SocketIO) delay() {
 	s.dialerTimes++
 }
 
+// sayHello sends initial authentication message with token
 func (s *SocketIO) sayHello() {
 	eventName := "agent-task"
 	eventData := map[string]interface{}{
@@ -181,54 +239,4 @@ func (s *SocketIO) sayHello() {
 	}
 	message, _ := s.escapedString(eventName, eventData)
 	s.messageChan <- WebSocketMessage{websocket.TextMessage, []byte(message)}
-}
-
-func (s *SocketIO) taskPing(data map[string]interface{}, taskId string) {
-	var pingCount = 3
-	var loopCount = 1
-	var delay float32
-	var err error
-	defer func() {
-		if s.taskChanDone[taskId] != nil {
-			close(s.taskChanDone[taskId])
-			delete(s.taskChanDone, taskId)
-		}
-	}()
-	ip := data["ip"].(string)
-	protocol := data["protocol"].(string)
-	pingtype := data["pingtype"].(string)
-	if pingtype == "continuous" {
-		pingCount = 1
-		loopCount = 100
-	}
-	s.taskChanDone[taskId] = make(chan struct{})
-	for i := 0; i < loopCount; i++ {
-		select {
-		case <-s.taskChanDone[taskId]:
-			log.Infof("Task %v received stop signal...", taskId)
-			return
-		default:
-			startTime := time.Now()
-			if protocol == "icmp" {
-				delay, err = components.IcmpPing(ip, pingCount)
-			} else if protocol == "tcp" {
-				delay, err = components.TcpPing(data)
-			}
-			if err != nil {
-				log.Debugf("ping error: %v", err)
-				delay = 0
-			}
-			res := map[string]interface{}{
-				"delay":    delay,
-				"taskType": "ping",
-				"taskId":   data["taskId"].(string),
-			}
-			s.sendMessage("agent-response", res)
-			duration := time.Since(startTime)
-			if duration < 1*time.Second {
-				remainingTime := 1*time.Second - duration
-				time.Sleep(remainingTime)
-			}
-		}
-	}
 }
