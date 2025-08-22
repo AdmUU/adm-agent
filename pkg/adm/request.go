@@ -8,6 +8,7 @@ import (
 
 	"github.com/admuu/adm-agent/pkg/network"
 	"github.com/admuu/adm-agent/pkg/utils"
+	"github.com/spf13/viper"
 )
 
 var log = utils.GetLogger()
@@ -54,10 +55,11 @@ func AgentTokenRequest(apiUrl string, authCode string, secret string, clientCert
     if clientCert != nil {
         reqSign = GenerateReqSign(urlPath, secret)
     }
-    url := fmt.Sprintf("%s%s?auth_code=%s&reqsign=%s",
+    url := fmt.Sprintf("%s%s?auth_code=%s&version=%s&reqsign=%s",
         apiUrl,
         urlPath,
         authCode,
+        viper.GetString("version"),
         reqSign)
     http := network.Http{Url: url, Method: "POST", Certificate: clientCert}
     response, err := http.ApiRequest()
