@@ -186,58 +186,71 @@ func (rt *RedirectCapturingRoundTripper) RoundTrip(req *http.Request) (*http.Res
 
 // webSpeedTest performs the actual web speed test
 func (wh *WebspeedHandler) webSpeedTest(url, targetIP string) (*WebSpeedTestResult, error) {
-	const (
-		maxRedirects    = 5
-		connectTimeout  = 2 * time.Second
-		totalTimeout    = 10 * time.Second
-		maxDownloadSize = 2 * 1024 * 1024
-		maxDownloadTime = 8 * time.Second
-	)
+    const (
+        maxRedirects    = 5
+        connectTimeout  = 2 * time.Second
+        totalTimeout    = 10 * time.Second
+        maxDownloadSize = 2 * 1024 * 1024
+        maxDownloadTime = 8 * time.Second
+    )
 
-	result := &WebSpeedTestResult{HTTPHeaders: ""}
+    result := &WebSpeedTestResult{HTTPHeaders: ""}
 
-	parsedURL, err := neturl.Parse(url)
-	if err != nil {
-		return nil, fmt.Errorf("parse URL error: %v", err)
-	}
+    parsedURL, err := neturl.Parse(url)
+    if err != nil {
+        return nil, fmt.Errorf("parse URL error: %v", err)
+    }
 
-	host := parsedURL.Hostname()
-	port := parsedURL.Port()
-	if port == "" {
-		if parsedURL.Scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
+    host := parsedURL.Hostname()
+    port := parsedURL.Port()
+    if port == "" {
+        if parsedURL.Scheme == "https" {
+            port = "443"
+        } else {
+            port = "80"
+        }
+    }
 
-	// DNS lookup timing
-	dnsStart := time.Now()
-	_, dnsErr := net.LookupIP(host)
-	dnsEnd := time.Now()
-	if dnsErr != nil {
-		log.Debugf("DNS lookup warning: %v", dnsErr)
-	}
+    // DNS lookup timing with better error handling
+    log.Debugf("Starting DNS lookup for host: %s", host)
+    dnsStart := time.Now()
+    dnsIPs, dnsErr := net.LookupIP(host)
+    dnsEnd := time.Now()
 
-	dialer := &net.Dialer{Timeout: connectTimeout}
-	var allHttpHeaders strings.Builder
+    if dnsErr != nil {
+        log.Debugf("DNS lookup failed for %s: %v", host, dnsErr)
+    } else {
+        log.Debugf("DNS lookup successful for %s: %v", host, dnsIPs)
+    }
 
-	// Setup custom transport with IP override
-	baseTransport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if strings.Contains(addr, host) {
-				ip := targetIP
-				if strings.Contains(ip, ":") && !strings.HasPrefix(ip, "[") {
-					ip = "[" + ip + "]"
-				}
-				addr = strings.Replace(addr, host, ip, 1)
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
-		MaxIdleConns:        10,
-		IdleConnTimeout:     30 * time.Second,
-		TLSHandshakeTimeout: connectTimeout,
-	}
+    dialer := &net.Dialer{Timeout: connectTimeout}
+    var allHttpHeaders strings.Builder
+
+    // Setup custom transport with improved IP override
+    baseTransport := &http.Transport{
+        DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+            log.Debugf("Dialing address: %s", addr)
+
+            h, p, err := net.SplitHostPort(addr)
+            if err != nil {
+                return nil, fmt.Errorf("failed to split host port %s: %v", addr, err)
+            }
+
+            if h == host {
+                ip := targetIP
+                // if strings.Contains(ip, ":") && !strings.HasPrefix(ip, "[") {
+                //     ip = "[" + ip + "]"
+                // }
+                addr = net.JoinHostPort(ip, p)
+                log.Debugf("Replaced address with target IP: %s", addr)
+            }
+
+            return dialer.DialContext(ctx, network, addr)
+        },
+        MaxIdleConns:        10,
+        IdleConnTimeout:     30 * time.Second,
+        TLSHandshakeTimeout: connectTimeout,
+    }
 
 	customTransport := &RedirectCapturingRoundTripper{
 		Transport:     baseTransport,
